@@ -1,0 +1,92 @@
+{
+	"commands": {
+		".exit": {
+			"description": "退出程序",
+			"params": []
+		},
+		".help": {
+			"description": "显示帮助信息",
+			"params": [
+				{
+					"name": "command",
+					"type": "string",
+					"description": "要查询的命令名称"
+				}
+			]
+		},
+		".show": {
+			"description": "显示配置/信息",
+			"params": [
+				{
+					"name": "target",
+					"type": "choice",
+					"choices": [
+						"config",
+						"voices"
+					],
+					"description": "要显示的内容类型"
+				}
+			]
+		},
+		".load": {
+			"description": "加载/切换模型",
+			"params": [
+				{
+					"name": "repo_id",
+					"type": "choice",
+					"choices": [],
+					"description": "模型仓库ID"
+				}
+			]
+		},
+		".set": {
+			"description": "配置参数",
+			"params": [
+				{
+					"name": "param",
+					"type": "choice",
+					"choices": [
+						"voice",
+						"join_sentences",
+						"sample_rate",
+						"n_zeros",
+						"device"
+					],
+					"parameters": {
+						"voice": "语音模型选择",
+						"join_sentences": "是否合并句子生成",
+						"sample_rate": "音频采样率(Hz)",
+						"n_zeros": "段落间静音样本数",
+						"device": "运行设备(cpu/cuda)"
+					}
+				}
+			]
+		},
+		".save": {
+			"description": "保存最近生成的音频",
+			"params": []
+		},
+		".update": {
+			"description": "更新模型缓存信息",
+			"params": []
+		}
+	},
+	"param_values": {
+		"join_sentences": [
+			"true",
+			"false"
+		],
+		"sample_rate": [
+			"24000",
+			"44100"
+		],
+		"n_zeros": [
+			"5000",
+			"10000"
+		],
+		"device": [
+			"cpu",
+			"cuda"
+		]
+	}
+}

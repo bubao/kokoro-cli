@@ -1,0 +1,232 @@
+#!/usr/bin/env python3
+import sys
+import click
+from tabulate import tabulate
+import numpy as np
+from config.voice_config import VoiceConfigManager
+from config.command_config import CommandConfig
+from core.tts_model import InteractiveKokoroTTS
+from cli.completer import init_session, CLICompleter
+
+# 解决 PyTorch 警告
+import warnings
+
+import jieba
+import logging
+
+jieba.setLogLevel(logging.INFO)
+
+warnings.filterwarnings(
+    "ignore",
+    message="`torch.nn.utils.weight_norm` is deprecated",
+    category=FutureWarning,
+    module="torch.nn.utils.weight_norm",
+)
+
+warnings.filterwarnings(
+    "ignore",
+    category=UserWarning,
+    message="dropout option adds dropout after all but last recurrent layer",
+)
+
+
+# 创建Click命令组
+@click.group(
+    invoke_without_command=True, context_settings={"obj": InteractiveKokoroTTS}
+)
+@click.pass_context
+def cli(ctx: click.Context):
+    """Kokoro TTS 交互式命令行工具"""
+    if ctx.invoked_subcommand is None:
+        # 启动交互模式
+        start_interactive_mode(ctx)
+
+
+# 注册命令
+@cli.command()
+def exit():
+    """退出程序"""
+    click.echo("退出交互模式")
+    sys.exit(0)
+
+
+@cli.command()
+@click.pass_context
+def help(ctx: click.Context):
+    """显示帮助信息"""
+    click.echo(ctx.parent.get_help())
+
+    # 获取声优信息
+    voice_config = VoiceConfigManager()
+    models_info = voice_config.get_models_info().get("models", {})
+
+    if not models_info:
+        click.echo("警告：声优配置未加载，请运行 .update 更新模型信息")
+        return
+
+    # 准备表格数据
+    table_data = []
+    for model in models_info.values():
+        for voice in model["voices"]:
+            table_data.append([voice["name"], voice["language"], voice["gender"]])
+
+    # 定义表头
+    headers = ["Name", "Language", "Gender"]
+
+    # 打印表格
+    click.echo("\n可用语音：")
+    click.echo(tabulate(table_data, headers=headers, tablefmt="grid"))
+
+
+@cli.command()
+@click.argument("repo_id", required=True)  # 强制用户必须提供 repo_id
+@click.pass_obj
+def load(tts: InteractiveKokoroTTS, repo_id):
+    """加载/切换模型"""
+    try:
+        tts.load_model(repo_id)
+        click.echo(f"模型已切换至：{repo_id}")
+
+        # 更新 CLICompleter 的补全选项
+        if hasattr(tts, "completer") and tts.completer:
+            tts.completer.set_current_model(repo_id)
+            click.echo("补全选项已更新")
+    except Exception as e:
+        click.echo(f"加载失败：{str(e)}")
+
+
+@cli.command()
+def update():
+    """更新模型缓存信息"""
+    VoiceConfigManager().update_cache()
+    click.echo("模型信息更新完成")
+
+
+@cli.command()
+@click.pass_obj
+def show(tts: InteractiveKokoroTTS):
+    """显示当前配置和模型状态"""
+    config = tts.get_current_config()
+    click.echo(f"模型仓库：{config['repo_id']}")
+    click.echo("当前配置：")
+    for param in config:
+        if param != "repo_id":
+            click.echo(
+                f"  {param:<15} = {config[param]}  # {tts.PARAM_DESCRIPTIONS[param]}"
+            )
+
+
+@cli.command()
+@click.argument(
+    "param",
+    type=click.Choice(["voice", "join_sentences", "sample_rate", "n_zeros", "device"]),
+)
+@click.argument("value", type=str)
+@click.pass_obj
+def set(tts: InteractiveKokoroTTS, param, value):
+    """设置参数（set 参数名 参数值）"""
+    # 类型转换和验证
+    if param == "join_sentences":
+        value = value.lower()
+    elif param in ["sample_rate", "n_zeros"]:
+        value = int(value)
+
+    # 特殊处理voice参数
+    if param == "voice":
+        if not hasattr(tts, "_current_repo_id") or not tts._current_repo_id:
+            raise click.BadParameter("当前未加载模型，请先运行 .load 加载模型")
+        valid_values = tts.command_config.get_param_values(
+            "voice", tts._current_repo_id
+        )
+    else:
+        valid_values = [
+            str(v)
+            for v in tts.command_config.get_config()["param_values"].get(param, [])
+        ]
+
+    if str(value) not in valid_values:
+        raise click.BadParameter(f"无效值：{value}，有效值：{valid_values}")
+
+    # 特殊处理设备切换
+    if param == "device":
+        tts.set_device(value)
+    else:
+        setattr(tts, f"_{param}", value)
+
+    click.echo(f"设置成功：{param} = {value}（{tts.PARAM_DESCRIPTIONS[param]}）")
+
+
+@cli.command()
+@click.argument("path", type=click.Path())
+@click.pass_obj
+def save(tts: InteractiveKokoroTTS, path):
+    """保存最近生成的音频"""
+    if not hasattr(tts, "last_audio") or tts.last_audio is None:
+        click.echo("尚未生成音频，无法保存")
+        return
+
+    try:
+        import soundfile as sf
+
+        sf.write(path, tts.last_audio, tts._sample_rate)
+        click.echo(f"音频已保存至：{path}")
+    except Exception as e:
+        click.echo(f"保存失败：{str(e)}")
+
+
+def start_interactive_mode(ctx: click.Context):
+    command_config = CommandConfig()  # 创建共享的配置实例
+
+    # 创建 CLICompleter 并绑定配置
+    completer = CLICompleter(command_config)
+    completer.command_config = command_config  # 绑定到 Completer
+    tts = InteractiveKokoroTTS(command_config=command_config)
+    ctx.obj = tts
+    tts.completer = completer  # 绑定到 TTS
+
+    session = init_session(completer)
+
+    click.echo("进入 Kokoro TTS 交互模式")
+    click.echo("输入文本直接生成音频，以 . 开头为命令")
+    click.echo("输入 .help 查看帮助\n")
+
+    while True:
+        try:
+            text = session.prompt("kokoro> ").strip()
+            if not text:
+                continue
+
+            if text.startswith("."):
+                # 转换为 Click 命令格式
+                args = text[1:].split()
+                try:
+                    cli.main(
+                        args=args,
+                        prog_name="kokoro",
+                        obj=tts,
+                        standalone_mode=False,
+                    )
+                except click.exceptions.Exit:
+                    continue
+                except click.ClickException as e:
+                    click.echo(f"错误：{e}")
+            else:
+                # 生成音频逻辑
+                try:
+                    audio_data = tts.generate_audio_data(text)
+                    tts.last_audio = audio_data  # 保存最后生成的音频
+                    tts.play_audio(audio_data)
+                    click.echo(
+                        f"音频生成成功，采样率：{tts._sample_rate}Hz，长度：{len(audio_data) / 1024 / 1024:.2f} Mb"
+                    )
+                except Exception as e:
+                    print(f"生成音频失败: {str(e)}")
+                    click.echo("生成音频失败，请检查输入或模型配置")
+
+        except (EOFError, KeyboardInterrupt):
+            click.echo("\n强制退出交互模式")
+            break
+
+
+if __name__ == "__main__":
+    cli()
