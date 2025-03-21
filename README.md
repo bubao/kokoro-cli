@@ -13,6 +13,7 @@ Kokoro CLI 是一个交互式命令行工具，用于生成和管理文本到语
 2. 安装依赖：
     ```sh
     pip install -r requirements.txt
+	pip install kokoro misaki[zh] misaki[en]
     ```
 
 ## 使用
